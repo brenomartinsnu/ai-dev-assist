@@ -50,6 +50,7 @@ Every recipe draws its placeholders from this single table — keep them uniform
 | `<CARD_ID>` | Card UUID | from the `all-cards` response |
 | `<SAVINGS_ACCOUNT_ID>` | Savings account UUID | from the account record |
 | `<CREDIT_ACCOUNT_ID>` | Credit account UUID | from the account record |
+| `<SOURCE_ID>` | Card source-id (fresh, unique per request) | a new lowercase UUID |
 | `<CID>` | Correlation id (tracking) | any UUID; `$(uuidgen)` |
 | `<LAST_FOUR>` | Last 4 digits of the physical card | `1234` |
 | `<LIMIT>` | Credit limit-range max | `5000` |
@@ -65,7 +66,9 @@ Every recipe draws its placeholders from this single table — keep them uniform
   - JSON body → `-d '{...}'`. EDN body → `--data '{...}' --content-type edn`.
 - **Kafka:** `<ACCOUNT> kafka produce <TOPIC> '<BODY_MESSAGE>' --content-type json --shard <SHARD>`
 - **EDN gotcha:** UUIDs are tagged literals: `#uuid "..."`. Sets use `#{...}`.
-  To auto-generate a lowercase UUID inline: `$(uuidgen | tr '[:upper:]' '[:lower:]')`.
+  Single-quote the whole `--data '...'` so the inner `"..."` need no escaping.
+  Single quotes don't expand `$(...)`, so generate `<SOURCE_ID>` first with
+  `uuidgen | tr '[:upper:]' '[:lower:]'` and paste the value in.
 
 ---
 
@@ -148,33 +151,35 @@ _Example:_
 nu-mx ser curl post s0 crebito /api/cards/<CARD_ID>/activation --env staging -f -d '{"last-four": "1234"}'
 ```
 
-### Create a card — Debit (gold), auto-generated source-id
+### Create a card — Debit (gold)
+> Generate a fresh `<SOURCE_ID>` first: `uuidgen | tr '[:upper:]' '[:lower:]'`
 ```bash
 <ACCOUNT> ser curl post <SHARD> kuchiyose /api/admin/customers/<CUSTOMER_ID>/manual-card-request \
-  --data "{:card-profile :debit-single :features-to-activate #{:debit} :savings-account-id #uuid \"<SAVINGS_ACCOUNT_ID>\" :product-type :gold-debit :virtual? true :source-type :primary-card :source-id #uuid \"$(uuidgen | tr '[:upper:]' '[:lower:]')\"}" \
+  --data '{:card-profile :debit-single :features-to-activate #{:debit} :savings-account-id #uuid "<SAVINGS_ACCOUNT_ID>" :product-type :gold-debit :virtual? true :source-type :primary-card :source-id #uuid "<SOURCE_ID>"}' \
   --content-type edn --env <ENV> --cid <CID>
 ```
 _Example:_
 ```bash
 nu-mx ser curl post s0 kuchiyose /api/admin/customers/<CUSTOMER_ID>/manual-card-request \
-  --data "{:card-profile :debit-single :features-to-activate #{:debit} :savings-account-id #uuid \"69efad12-3a82-4686-a454-0317f6fae9ba\" :product-type :gold-debit :virtual? true :source-type :primary-card :source-id #uuid \"$(uuidgen | tr '[:upper:]' '[:lower:]')\"}" \
+  --data '{:card-profile :debit-single :features-to-activate #{:debit} :savings-account-id #uuid "69efad12-3a82-4686-a454-0317f6fae9ba" :product-type :gold-debit :virtual? true :source-type :primary-card :source-id #uuid "8f3a9c20-1b7e-4d56-9a2f-2c1d4e6f8a90"}' \
   --content-type edn --env staging --cid <CID>
 ```
 
-### Create a card — Credit (gold), auto-generated source-id
+### Create a card — Credit (gold)
+> Generate a fresh `<SOURCE_ID>` first: `uuidgen | tr '[:upper:]' '[:lower:]'`
 ```bash
 <ACCOUNT> ser curl post <SHARD> kuchiyose /api/admin/customers/<CUSTOMER_ID>/manual-card-request \
-  --data "{:card-profile :credit-single :features-to-activate #{:credit} :savings-account-id #uuid \"<SAVINGS_ACCOUNT_ID>\" :product-type :gold :virtual? true :source-type :primary-card :source-id #uuid \"$(uuidgen | tr '[:upper:]' '[:lower:]')\" :credit-account-id \"<CREDIT_ACCOUNT_ID>\"}" \
+  --data '{:card-profile :credit-single :features-to-activate #{:credit} :savings-account-id #uuid "<SAVINGS_ACCOUNT_ID>" :product-type :gold :virtual? true :source-type :primary-card :source-id #uuid "<SOURCE_ID>" :credit-account-id "<CREDIT_ACCOUNT_ID>"}' \
   --content-type edn --env <ENV> --cid <CID>
 ```
 _Example:_
 ```bash
 nu-mx ser curl post s0 kuchiyose /api/admin/customers/<CUSTOMER_ID>/manual-card-request \
-  --data "{:card-profile :credit-single :features-to-activate #{:credit} :savings-account-id #uuid \"69efad12-3a82-4686-a454-0317f6fae9ba\" :product-type :gold :virtual? true :source-type :primary-card :source-id #uuid \"$(uuidgen | tr '[:upper:]' '[:lower:]')\" :credit-account-id \"69efad11-127a-4d15-ab4f-5204cb12a660\"}" \
+  --data '{:card-profile :credit-single :features-to-activate #{:credit} :savings-account-id #uuid "69efad12-3a82-4686-a454-0317f6fae9ba" :product-type :gold :virtual? true :source-type :primary-card :source-id #uuid "8f3a9c20-1b7e-4d56-9a2f-2c1d4e6f8a90" :credit-account-id "69efad11-127a-4d15-ab4f-5204cb12a660"}' \
   --content-type edn --env staging --cid <CID>
 ```
-> `<SAVINGS_ACCOUNT_ID>` / `<CREDIT_ACCOUNT_ID>` in the examples are sample staging
-> values — always swap for the real ones. `source-id` is auto-generated per run.
+> `<SAVINGS_ACCOUNT_ID>` / `<CREDIT_ACCOUNT_ID>` / `<SOURCE_ID>` in the example are
+> sample values — always swap for real ones, and use a new `<SOURCE_ID>` each request.
 
 ---
 
