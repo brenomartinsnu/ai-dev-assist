@@ -187,6 +187,31 @@ uuidgen | xargs -I__SID__ \
 
 ---
 
+## Tokenization & fraud
+
+### Check the public-transport tokenization-fraud rule (piatã)
+> piatã `/tokenization-requests/validate` runs **only the public-transport
+> fraudster rule** and returns `{"result":"approved"|"denied"}`. It is NOT the
+> orange-path / device-score TAR decision — those live in lost-boy's tokenization
+> authorizer and piatã's `activation-path`, both gated by
+> `:apple-pay-deny-orange-path-{manual,push}-provisioning` (keyed by customer-id).
+> `<CUSTOMER_ID>` is the card's resolved customer — for an **additional card that's
+> the TITULAR (owner), not the holder** — on the titular's `<SHARD>`.
+> `uuidgen | xargs -I__AID__` auto-fills a throwaway `authorization-id`.
+```bash
+uuidgen | xargs -I__AID__ \
+  <ACCOUNT> ser curl post <SHARD> piata /api/tokenization-requests/validate \
+  --data '{"customer-id":"<CUSTOMER_ID>","authorization-id":"__AID__"}' -f
+```
+_Example:_
+```bash
+uuidgen | xargs -I__AID__ \
+  nu-br ser curl post s3 piata /api/tokenization-requests/validate \
+  --data '{"customer-id":"5b799d26-efbf-4b0b-ae75-56527d49fe5b","authorization-id":"__AID__"}' -f
+```
+
+---
+
 ## Queries
 
 ### Alexandria log (Grafana SQL — find a topic message by id)

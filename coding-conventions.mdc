@@ -1,0 +1,600 @@
+---
+description: Nubank Cards & Logistics — Diplomat architecture and Clojure service conventions
+globs: "**/*.clj"
+alwaysApply: false
+---
+
+You are acting as a senior engineer on Nubank's **Cards and Logistics Platforms Squad**. Apply these coding conventions to all code generation and review tasks in this context.
+
+Reference repositories: **piata** and **better-call-saul**.
+
+---
+
+## Diplomat Architecture — Layer Overview
+
+Nubank services follow the **Diplomat Architecture**, a Hexagonal / Ports & Adapters variant with strict naming and layering conventions.
+
+```
+External world
+     │
+     ▼
+diplomat.*          ← entry/exit points (HTTP server, Kafka consumer/producer, DB, HTTP client)
+     │
+adapters.*          ← pure functions: translate wire ↔ model
+     │
+controllers.*       ← orchestrate domain flows; call diplomat.* and logic.*
+     │
+logic.*             ← pure business logic; model-only deps, no side effects
+     │
+models.*            ← data shape definitions (plumatic/schema)
+     │
+wire.in / wire.out  ← external data contracts (inbound loose, outbound strict)
+```
+
+### Layer Dependency Rules
+
+| Layer | May depend on |
+|---|---|
+| `diplomat.consumer` | `adapters`, `wire`, `controllers`, `models` |
+| `diplomat.http-server` | `adapters`, `wire`, `controllers`, `models` |
+| `diplomat.http-client` | `adapters`, `wire`, `models` |
+| `diplomat.producer` | `adapters`, `wire`, `models` |
+| `db.datomic.*` | `adapters`, `wire.datomic`, `models` |
+| `adapters` | `wire`, `logic`, `models` — pure functions only |
+| `wire.*` | `models` only |
+| `models` | nothing — pure data structures |
+| `controllers` | `db.datomic.*`, `diplomat.*`, `models`, `logic` — **never** imports adapters directly |
+| `logic` | `models` only — **must** be pure (no side effects, no I/O) |
+
+### Domain layer (concepts)
+
+Canonical definitions follow Nubank’s [Diplomat Architecture Concepts — Domain layer](https://nubank.atlassian.net/wiki/spaces/ENGCHAP/pages/262706725402/Diplomat+Architecture+Concepts#Domain-Layer) (ENGCHAP / `#guild-code-quality`).
+
+**Domain layer (scope)** — Implements the service’s purpose: core behavior and business rules. It coordinates work and may invoke **external layer** capabilities (HTTP clients, producers, databases, etc.) to observe or change system state. **Wire** schemas are not part of the domain layer; use **models** inside the domain and adapt at **diplomat** boundaries.
+
+**Controller** — Orchestrates **one** domain flow, combining **domain** pieces (`logic`, `models`) with **external** capabilities (`diplomat.*`, `db.*`, protocol components). Controllers are usually **impure** (they depend on live system state and often perform side effects). They are **narrower than MVC controllers**: they do **not** own request parsing, response shaping, or wire schemas (that is **diplomat** + **adapters**), and they do **not** embed persistence mechanics (that stays in **database** modules the controller calls). **Do not call adapters from controllers** — wire ↔ model translation belongs in the **external layer** (e.g. HTTP handler, consumer handler, producer wrapper), not inside `controllers.*`. **Do not pass components** (e.g. `config`, database components) into **logic**; read the needed values in the controller and pass plain data (`models`, primitives) into logic so logic stays deterministic and cheap to unit test. In graph-style APIs (GraphQL, **pathom** BFFs, etc.), **resolvers** often act as controllers when they orchestrate external I/O and domain steps the same way.
+
+**Logic** — Encodes **business rules** and **conditionals** for the domain. **Must be pure**: deterministic for the same arguments, **no side effects**, **no I/O**. **Must not call** diplomats, adapters, databases, HTTP/Kafka clients, or components — only **`logic.*`** and **`models.*`**. Favor **high unit test coverage** without mocks when these rules hold.
+
+**Model** — Declares **domain data shapes** (entities and values the service reasons about). Models should be the **only** data structures used **inside the domain layer**. Prefer **strict** schemas. **Do not mirror database entity layout** in models — persistence shape lives under **`wire.datomic`** (or other wire DB namespaces); **adapters** convert model ↔ wire DB. **Adapters** also convert model ↔ **wire.in** / **wire.out** at boundaries; keep wire types out of business rules.
+
+For exceptions vs domain errors and broader implementation detail, see [Diplomat Architecture Implementation Guidelines](https://nubank.atlassian.net/wiki/display/ENGCHAP/Diplomat+Architecture+Implementation+Guidelines) on Confluence.
+
+---
+
+## Folder Structure
+
+```
+src/<service_name>/
+  controllers/                  # Domain orchestration
+    <feature>.clj
+  diplomat/
+    http_server.clj             # Route registry (all routes merged here)
+    http_server/
+      <feature>.clj             # HTTP handler per feature
+    http_client/
+      <external_service>.clj    # One file per upstream service
+    consumer.clj                # Kafka consumer handlers + settings
+    producer.clj                # Kafka producer functions + settings
+  db/
+    datomic/
+      <entity>.clj              # Datomic CRUD per entity
+  adapters/
+    <feature>.clj               # wire ↔ model translators
+  wire/
+    in/
+      <feature>.clj             # Inbound schemas (loose-schema)
+    out/
+      <feature>.clj             # Outbound schemas (strict-schema)
+    datomic/
+      <entity>.clj              # DB schemas (strict-schema, namespaced keywords)
+  models/
+    <entity>.clj                # Domain schemas (strict-schema)
+  logic/
+    <domain>.clj                # Pure business rules
+  config.clj                    # Config access functions
+  server.clj                    # Component lifecycle / system startup
+
+resources/
+  <service>_config.json.base    # Service configuration (URLs, topics, etc.)
+
+test/
+  unit/<service_name>/
+    adapters/
+      <feature>_test.clj
+    logic/
+      <domain>_test.clj
+    db/
+      datomic/
+        <entity>_test.clj       # Unit tests for DB functions (optional)
+  integration/integration/
+    <feature>_test.clj          # state-flow integration tests
+    aux/
+      request.clj               # HTTP request helpers
+      <service_stub>.clj        # Stub responses for external services
+      db/
+        <entity>.clj            # DB helpers for integration tests
+  shared/<service_name>/
+    fixtures/
+      <entity>.clj              # Reusable test fixtures
+```
+
+---
+
+## Naming Conventions
+
+### Files and Namespaces
+
+- **Files**: `snake_case.clj`
+- **Namespaces**: `service-name.layer.feature-name` (kebab-case), matching the file path
+
+```clojure
+;; file: src/better_call_saul/controllers/card_identify.clj
+(ns better-call-saul.controllers.card-identify ...)
+
+;; file: src/piata/wire/in/authorization.clj
+(ns piata.wire.in.authorization ...)
+```
+
+### Require Aliases
+
+Use `layer.feature` aliases to make the origin layer clear:
+
+```clojure
+(:require [better-call-saul.diplomat.http-client.card-skins :as http-client.card-skins]
+          [better-call-saul.logic.card-summaries            :as logic.card-summaries]
+          [better-call-saul.models.card-skin                :as models.card-skin]
+          [better-call-saul.wire.in.card-identify           :as wire.in.card-identify]
+          [better-call-saul.wire.out.card-identify          :as wire.out.card-identify])
+```
+
+### Schema Names
+
+- Schemas: `PascalCase` (e.g., `CardSummary`, `IdentifyCardRequest`, `ProtoCard`)
+- Skeletons (reusable maps): `^:private skeleton` (kebab-case symbol)
+
+### Functions
+
+- All functions: `kebab-case`
+- Side-effecting functions (I/O, DB, Kafka): suffix with `!` (e.g., `lookup!`, `upsert!`, `customer-name!`)
+- Pure functions: no `!` suffix
+
+### Adapter Function Naming
+
+| Direction | Naming |
+|---|---|
+| Inbound wire → model | `wire->model` |
+| Model → outbound wire | `model->wire` |
+| Datomic entity → model | `datomic->internal` or `datomic->model` |
+| Model → Datomic entity | `internal->datomic` or `model->datomic` |
+
+---
+
+## Schema Patterns
+
+### wire.in — Loose (tolerant reader)
+
+```clojure
+(ns better-call-saul.wire.in.card-identify
+  (:require [common-core.schema :as schema]
+            [schema.core :as s]))
+
+(def ^:private skeleton
+  {:proto-card-id {:schema s/Uuid :required false}
+   :pan-encrypted {:schema s/Str  :required false :sensitive true}})
+
+(s/defschema IdentifyCardRequest
+  (schema/loose-schema skeleton))
+```
+
+### wire.out — Strict (conservative publisher)
+
+```clojure
+(ns better-call-saul.wire.out.card-identify
+  (:require [common-core.schema :as schema]
+            [schema.core :as s]))
+
+(s/defschema ProtoCard
+  (schema/strict-schema
+   {:proto-card-id {:schema s/Uuid :required true}
+    :pan-last-four {:schema s/Str  :required false}}))
+```
+
+### models — Strict domain types
+
+```clojure
+(ns better-call-saul.models.card-identify
+  (:require [common-core.schema :as schema]
+            [schema.core :as s]))
+
+(s/defschema IdentifyRequest
+  (schema/strict-schema
+   {:proto-card-id {:schema s/Uuid :required false}
+    :pan-encrypted {:schema s/Str  :required false}}))
+```
+
+### wire.datomic — Strict, namespaced keywords
+
+DB schemas live in `wire/datomic/<entity>.clj`. They use **namespaced map literals** (`#:ns{}`), always `strict-schema`, and include DB metadata (`:id true`, `:doc`, `:index`). **Never reuse models as wire.datomic** — they are separate schemas adapted in both directions.
+
+```clojure
+;; wire/datomic/card_skin.clj
+(ns better-call-saul.wire.datomic.card-skin
+  (:require [common-core.schema :as schema]
+            [schema.core :as s]))
+
+;; Persisted = what comes back from a query (includes DB attrs, may be optional)
+(def ^:private skeleton
+  #:card-skin{:id           {:schema s/Uuid :id true    :doc "Card skin selection ID"}
+              :card-id      {:schema s/Uuid :index true  :doc "Associated card ID"}
+              :skin-id      {:schema s/Str               :doc "Selected skin identifier"}
+              :collection-id {:schema s/Str              :doc "Skin collection"}
+              :customer-id  {:schema s/Uuid :index true  :doc "Owner customer ID"}
+              :selected-at  {:schema s/Inst :required false :doc "Selection timestamp"}})
+
+(s/defschema Persisted
+  (schema/strict-schema skeleton))
+```
+
+---
+
+## HTTP Server Pattern
+
+```clojure
+;; diplomat/http_server/card_identify.clj
+(ns better-call-saul.diplomat.http-server.card-identify
+  (:require [better-call-saul.adapters.card-identify          :as adapters.card-identify]
+            [better-call-saul.controllers.card-identify        :as controllers.card-identify]
+            [better-call-saul.wire.in.card-identify            :as wire.in.card-identify]
+            [better-call-saul.wire.out.card-identify           :as wire.out.card-identify]
+            [common-io.interceptors.adapt                      :as adapt]
+            [common-io.interceptors.auth                       :as auth]
+            [common-io.interceptors.doc                        :as doc]))
+
+(defn identify-card
+  [{:keys [data components]}]
+  (let [{:keys [http]} components
+        result (-> (adapters.card-identify/wire->model data)
+                   (controllers.card-identify/identify! http)
+                   (adapters.card-identify/model->wire))]
+    {:status 200 :body result}))
+
+(def routes
+  #{["/api/activation/identify-card"
+     :post (conj common-interceptors
+                 (doc/desc "Identify a card by proto-card-id or pan-encrypted")
+                 (auth/allow? #{"cards-admin"})
+                 (adapt/coerce! wire.in.card-identify/IdentifyCardRequest)
+                 (adapt/externalize! {200 wire.out.card-identify/ProtoCard})
+                 identify-card)
+     :route-name :identify-card]})
+```
+
+Routes must be merged into `diplomat/http_server.clj` via `set/union`.
+
+---
+
+## HTTP Client Pattern
+
+```clojure
+;; diplomat/http_client/tremiliques.clj
+(ns better-call-saul.diplomat.http-client.tremiliques
+  (:require [better-call-saul.models.card-identify :as models.card-identify]
+            [better-call-saul.wire.out.card-identify :as wire.out.card-identify]
+            [common-core.protocols.http-client :as protocols.http-client]
+            [schema.core :as s]))
+
+(def bookmarks-settings
+  {:tremiliques/identify-card
+   [{:method       :post
+     :schema-resps {200 wire.out.card-identify/ProtoCard}}]})
+
+(s/defn identify-card! :- models.card-identify/ProtoCard
+  [request :- models.card-identify/IdentifyRequest
+   http    :- protocols.http-client/IHttpClient]
+  (protocols.http-client/req! http {:method :post
+                                    :url    :tremiliques/identify-card
+                                    :body   (adapters.card-identify/model->wire request)}))
+```
+
+---
+
+## Kafka Consumer / Producer Pattern
+
+```clojure
+;; diplomat/consumer.clj
+(s/defn card-event-handler
+  [event  :- wire.in.card/CardEvent
+   _meta
+   {:keys [producer datomic]}]
+  (-> (adapters.card/wire->model event)
+      (controllers.card/process! producer datomic)))
+
+(def settings
+  {:card-event {:handler card-event-handler :schema wire.in.card/CardEvent}})
+```
+
+```clojure
+;; diplomat/producer.clj
+(s/defn card-updated!
+  [card     :- models.card/Card
+   producer :- protocols.producer/IProducer]
+  (protocols.producer/produce!
+    producer
+    {:topic   :card-updated
+     :message (adapters.card/model->wire card)}))
+
+(def settings
+  {:card-updated {:schema wire.out.card/CardUpdated :content-type :edn}})
+```
+
+---
+
+## Controller Pattern
+
+```clojure
+;; controllers/card_identify.clj
+(ns better-call-saul.controllers.card-identify
+  (:require [better-call-saul.diplomat.http-client.tremiliques :as http-client.tremiliques]
+            [better-call-saul.models.card-identify              :as models.card-identify]
+            [common-core.protocols.http-client                  :as protocols.http-client]
+            [schema.core                                         :as s]))
+
+;; Controllers receive models, pass models to diplomat.*, return models.
+;; They never call adapter functions directly.
+(s/defn identify! :- models.card-identify/ProtoCard
+  [request :- models.card-identify/IdentifyRequest
+   http    :- protocols.http-client/IHttpClient]
+  (http-client.tremiliques/identify-card! request http))
+```
+
+---
+
+## Logic Pattern
+
+```clojure
+;; logic/card_summaries.clj
+;; Pure functions only — no I/O, no side effects, no component deps.
+(s/defn card-ids-from-summaries :- [s/Uuid]
+  [summaries :- [models.card-summaries/CardSummary]]
+  (mapv :card-id summaries))
+
+(s/defn insert-skins-in-card-summaries :- [models.card-summaries/CardSummary]
+  [summaries    :- [models.card-summaries/CardSummary]
+   skin-by-id   :- {s/Uuid models.card-skin/Skin}]
+  (map #(assoc % :skin (get skin-by-id (:card-id %))) summaries))
+```
+
+---
+
+## Testing
+
+### Unit Tests (logic and adapters only)
+
+```clojure
+;; test/unit/better_call_saul/adapters/card_identify_test.clj
+(ns better-call-saul.adapters.card-identify-test
+  (:require [better-call-saul.adapters.card-identify :as adapters.card-identify]
+            [clojure.test :refer :all]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [common-test.schema :as schema-test]))
+
+(defspec wire->model-round-trip 50
+  (schema-test/for-all [wire (schema-test/generator wire.in.card-identify/IdentifyCardRequest)]
+    (is (= (adapters.card-identify/wire->model wire)
+           (adapters.card-identify/wire->model wire)))))
+```
+
+- **Only pure function namespaces get unit tests**: `logic.*` and `adapters.*`
+- `diplomat.*` (http-client, http-server, consumer, producer) and `controllers.*` are **excluded** from unit tests — even if a specific namespace test wouldn't be "wrong", the team does not maintain them
+- Logic and adapters should have **high unit test coverage**
+
+### Integration Tests (state-flow)
+
+```clojure
+;; test/integration/integration/card_identify_test.clj
+(ns integration.card-identify-test
+  (:require [integration.aux.request :as request]
+            [integration.aux.non-perso-card :as stubs.non-perso-card]
+            [state-flow.api :refer [flow]]))
+
+(def identify-by-proto-card-id-success
+  (flow "Given a card request with proto-card-id"
+    (stubs.non-perso-card/stub-identify-card-success)
+    [response (request/identify-card {:proto-card-id (random-uuid)})]
+    (match? {:status 200 :body {:proto-card-id some?}} response)))
+```
+
+---
+
+## Datomic / DB Layer
+
+### Directory and Namespace
+
+```
+src/<service>/db/datomic/<entity>.clj
+→ ns: <service>.db.datomic.<entity>
+```
+
+Examples:
+```clojure
+;; src/fina_estampa/db/datomic/country.clj
+(ns fina-estampa.db.datomic.country ...)
+
+;; src/better_call_saul/db/datomic/card_skin.clj
+(ns better-call-saul.db.datomic.card-skin ...)
+```
+
+### Datomic Adapters
+
+DB-specific adapters live in the same `adapters/` directory as other adapters. If adapters grow large, they can live in a sub-file named after the entity.
+
+```clojure
+;; adapters/card_skin.clj
+(ns better-call-saul.adapters.card-skin
+  (:require [better-call-saul.models.card-skin        :as models.card-skin]
+            [better-call-saul.wire.datomic.card-skin  :as wire.datomic.card-skin]
+            [schema.core :as s]))
+
+(s/defn internal->datomic :- wire.datomic.card-skin/Persisted
+  [{:keys [id card-id skin-id collection-id customer-id selected-at]}
+   :- models.card-skin/CardSkin]
+  #:card-skin{:id            id
+              :card-id       card-id
+              :skin-id       skin-id
+              :collection-id collection-id
+              :customer-id   customer-id
+              :selected-at   selected-at})
+
+(s/defn datomic->internal :- models.card-skin/CardSkin
+  [{:card-skin/keys [id card-id skin-id collection-id customer-id selected-at]}
+   :- wire.datomic.card-skin/Persisted]
+  {:id            id
+   :card-id       card-id
+   :skin-id       skin-id
+   :collection-id collection-id
+   :customer-id   customer-id
+   :selected-at   selected-at})
+```
+
+### DB Function Pattern
+
+```clojure
+;; db/datomic/card_skin.clj
+(ns better-call-saul.db.datomic.card-skin
+  (:require [better-call-saul.adapters.card-skin          :as adapters.card-skin]
+            [better-call-saul.models.card-skin             :as models.card-skin]
+            [better-call-saul.wire.datomic.card-skin       :as wire.datomic.card-skin]
+            [common-core.schema                            :as core.schema]
+            [common-datomic.api                            :as db]
+            [common-datomic.db                             :as ddb]
+            [common-datomic.protocols.datomic              :as protocols.datomic]
+            [schema.core                                   :as s])
+  (:import [datomic.db Db]))
+
+;; Reads receive a DB value (Db snapshot), not the datomic component
+(s/defn lookup! :- (s/maybe models.card-skin/CardSkin)
+  [card-id :- s/Uuid
+   db      :- Db]
+  (some-> (db/lookup [:card-skin/card-id card-id] db)
+          (core.schema/loose-coerce! wire.datomic.card-skin/Persisted)
+          adapters.card-skin/datomic->internal))
+
+;; Batch queries return collections
+(s/defn fetch-by-card-ids! :- [models.card-skin/CardSkin]
+  [card-ids :- [s/Uuid]
+   db       :- Db]
+  (let [result (db/entities '{:find  [?e]
+                               :in    [$ [?card-id ...]]
+                               :where [[?e :card-skin/card-id ?card-id]]}
+                             db card-ids)]
+    (->> (core.schema/loose-coerce! result [wire.datomic.card-skin/Persisted])
+         (mapv adapters.card-skin/datomic->internal))))
+
+;; Writes receive the datomic component
+(s/defn upsert! :- models.card-skin/CardSkin
+  [skin    :- models.card-skin/CardSkin
+   datomic :- protocols.datomic/IDatomic]
+  (-> (adapters.card-skin/internal->datomic skin)
+      (db/upsert-entity! :card-skin/id datomic)  ;; note: first arg is datomic entity map
+      :entity
+      (core.schema/loose-coerce! wire.datomic.card-skin/Persisted)
+      adapters.card-skin/datomic->internal))
+
+;; Insert (unique constraint — throws on duplicate)
+(s/defn create! :- models.card-skin/CardSkin
+  [skin    :- models.card-skin/CardSkin
+   datomic :- protocols.datomic/IDatomic]
+  (-> (adapters.card-skin/internal->datomic skin)
+      (db/insert-entity! :card-skin/id datomic)
+      :entity
+      (core.schema/loose-coerce! wire.datomic.card-skin/Persisted)
+      adapters.card-skin/datomic->internal))
+
+;; Retraction
+(s/defn retract!
+  [id      :- s/Uuid
+   datomic :- protocols.datomic/IDatomic]
+  (db/retract-entity! [:card-skin/id id] datomic))
+```
+
+### Controller Using DB Layer
+
+```clojure
+;; controllers/card_skins.clj
+(ns better-call-saul.controllers.card-skins
+  (:require [better-call-saul.db.datomic.card-skin    :as db.card-skin]
+            [better-call-saul.logic.card-skins         :as logic.card-skins]
+            [better-call-saul.models.card-skin         :as models.card-skin]
+            [common-datomic.db                         :as ddb]
+            [common-datomic.protocols.datomic          :as protocols.datomic]
+            [schema.core                               :as s]))
+
+;; Get the DB snapshot once; reuse it for all reads in the same flow
+(s/defn get-card-skin! :- (s/maybe models.card-skin/CardSkin)
+  [card-id :- s/Uuid
+   datomic :- protocols.datomic/IDatomic]
+  (let [db (ddb/db datomic)]
+    (db.card-skin/lookup! card-id db)))
+
+(s/defn upsert-card-skin! :- models.card-skin/CardSkin
+  [skin    :- models.card-skin/CardSkin
+   datomic :- protocols.datomic/IDatomic]
+  (let [validated (logic.card-skins/validate! skin)]
+    (db.card-skin/upsert! validated datomic)))
+```
+
+### DB Integration Test Helpers
+
+State-flow integration tests seed and query Datomic through helpers in `aux/db/`:
+
+```clojure
+;; test/integration/integration/aux/db/card_skin.clj
+(ns integration.aux.db.card-skin
+  (:require [better-call-saul.wire.datomic.card-skin :as wire.datomic.card-skin]
+            [common-datomic.api                      :as db]
+            [schema.core                             :as s]
+            [state-flow.helpers.core                 :as helpers]))
+
+(s/defn upsert!
+  [skin :- wire.datomic.card-skin/Persisted]
+  (helpers/with-datomic #(db/upsert-entity! :card-skin/id skin %)))
+
+(s/defn fetch-all []
+  (helpers/with-db
+    #(db/entities '{:find  [?e]
+                    :where [[?e :card-skin/id _]]} %)))
+```
+
+### Key Datomic Rules
+
+- **Read functions take `Db` (snapshot), write functions take the `datomic` component** — never mix them.
+- **Get one snapshot per controller flow**: call `(ddb/db datomic)` once and pass it to all read functions in the same flow. Calling it multiple times yields different snapshots.
+- **Never reuse models as wire.datomic** — they are separate schemas. Models have plain keywords; wire.datomic uses namespaced keywords (`#:entity{}`).
+- **Always adapt before writing** (`internal->datomic`) and after reading (`datomic->internal`). DB functions own these adapter calls — controllers do not.
+- **`common-core.schema/loose-coerce!`** is used to coerce raw Datomic results into the `wire.datomic` schema before adapting to model.
+- **`:id true` marks the identity attribute** used as the lookup ref (e.g., `[:card-skin/id uuid]`).
+- **`:index true`** on attributes queried in `:where` clauses for performance.
+- **Do not store PII in cardinality-many attributes.**
+- **Use `db/retract-entity!` with the lookup ref** (`[:entity/id uuid]`), not the numeric entity id.
+
+---
+
+## Key Rules to Follow
+
+1. **Never pass a component (http, datomic, producer) into a logic function** — extract values first in the controller.
+2. **Never use loose-schema in models or wire.out** — only in wire.in for tolerant reading.
+3. **One namespace per concept, per feature** — avoid large catch-all files.
+4. **Adapters are pure** — no I/O, no side effects; test them with property-based tests.
+5. **Controllers orchestrate** — they call `db.datomic.*`, `diplomat.*`, and `logic.*` but never transform data themselves.
+6. **All routes merged in `diplomat/http_server.clj`** — feature routes defined in sub-namespaces.
+7. **Bookmarks registered in http-client namespace** — `bookmarks-settings` + URL in config JSON.
+8. **Sensitive fields** (PAN, CVV) must be marked `:sensitive true` in schemas.
+9. **Use `adapt/path-id->uuid` interceptor** for UUID path params instead of manual parsing.
+10. **Use `common-core.misc/assoc-some`** when building maps with optional/nullable fields.
+11. **DB reads take `Db` snapshot; DB writes take the `datomic` component** — never mix signatures.
+12. **Get one DB snapshot per flow**: `(ddb/db datomic)` once in the controller, pass it down to all read calls.
+13. **wire.datomic schemas use namespaced keywords** (`#:entity{:id ...}`) and are always `strict-schema`.
+14. **Models and wire.datomic are separate** — adapt between them inside `db/datomic/*` functions, not in controllers.
+15. **DB integration test helpers** live in `test/integration/integration/aux/db/<entity>.clj` using `state-flow.helpers.core`.
+16. **Map alignment**: in multi-entry maps, align all values to the longest key + 1 space. When a new key is longer than the current longest, re-align all existing entries to match.
