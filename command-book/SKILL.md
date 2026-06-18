@@ -141,6 +141,28 @@ _Example:_
 ```bash
 nu-mx ser curl get s0 crebito /api/customers/<CUSTOMER_ID>/all-cards --env staging -f
 ```
+> Returns **every** card (including canceled), sorted by tx instant. Route `:get-all-cards-by-customer`.
+
+### Get one card (by card id)
+> Single card with profile + activation status. Keyed by `<CARD_ID>`, on the card owner's `<SHARD>`. Route `:one-card` → `in/one-card+profile+activation-status`.
+```bash
+<ACCOUNT> ser curl get <SHARD> crebito /api/cards/<CARD_ID> --env <ENV> -f
+```
+_Example:_
+```bash
+nu-mx ser curl get s0 crebito /api/cards/<CARD_ID> --env staging -f
+```
+
+### Get not-canceled cards for a customer
+> All **non-canceled** cards, physical + virtual. Route `:all-cards-non-canceled-by-customer`.
+```bash
+<ACCOUNT> ser curl get <SHARD> crebito /api/customers/<CUSTOMER_ID>/cards/all-cards-non-canceled --env <ENV> -f
+```
+_Example:_
+```bash
+nu-mx ser curl get s0 crebito /api/customers/<CUSTOMER_ID>/cards/all-cards-non-canceled --env staging -f
+```
+> Physical-only variant: swap the path for `/api/customers/<CUSTOMER_ID>/cards/non-canceled` (route `:non-canceled-cards-by-customer`).
 
 ### Activate a card
 ```bash
