@@ -23,14 +23,22 @@ Every recipe is written **template-first**: a single fenced block using
 1. **Match** the user's intent to a recipe below (search by keyword: card,
    topic, customer, creds, project, logs…).
 2. **Fill** every `<PLACEHOLDER>` in the template from what the user gave you.
-   If a *required* value is missing, ask for it — or leave the `<PLACEHOLDER>`
-   in place and call it out explicitly. Never invent IDs. Use the `Example` only
-   as a shape reference, never copy its literal ids/values.
+   Apply the **Defaults** below for anything the user didn't specify. If a
+   *required* value has no default and is missing, ask for it — or leave the
+   `<PLACEHOLDER>` in place and call it out explicitly. Never invent IDs. Use the
+   `Example` only as a shape reference, never copy its literal ids/values.
 3. **Output ONE ready-to-run command** in a copy-able code block.
 4. **Do NOT run it.** Hand it to the user to execute. (If they explicitly say
    "run it", you may, but default to handing it over.)
-5. **State your assumptions** in one line after the command — env, shard,
-   account alias, and anything you defaulted.
+5. **Output only the command** — no assumptions / env / shard / account recap
+   footer. Only call out a `<PLACEHOLDER>` you had to leave unfilled.
+
+### Defaults
+
+When the user doesn't say otherwise:
+- **`<ACCOUNT>` → `nu-br`** (Brazil 🇧🇷).
+- **`<ENV>` → `prod`, written explicitly as `--env prod`.** Never omit `--env`.
+  Use `--env staging` only when the user explicitly asks for staging.
 
 ### Placeholder legend
 
@@ -38,13 +46,13 @@ Every recipe draws its placeholders from this single table — keep them uniform
 
 | Placeholder | Meaning | Example value |
 |---|---|---|
-| `<ACCOUNT>` | Account alias prefix for nucli | `nu-mx` 🇲🇽 · `nu-br` 🇧🇷 · `nu-co` 🇨🇴 |
+| `<ACCOUNT>` | Account alias prefix for nucli | `nu-br` 🇧🇷 (default) · `nu-mx` 🇲🇽 · `nu-co` 🇨🇴 |
 | `<ACCOUNT_ALIAS>` | Bare account alias (for `--account-alias`) | `br` · `mx` · `co` |
 | `<SHARD>` | Shard for the service call | `s0` (sharded) · `global` (non-sharded) |
 | `<SERVICE>` | Target service name | `crebito` · `kuchiyose` · `factorio` |
 | `<METHOD>` | HTTP verb | `get` · `post` · `put` · `delete` |
 | `<PATH>` | API route on the service | `/api/customers/<id>/all-cards` |
-| `<ENV>` | Environment | `staging` (default); omit `--env` for prod |
+| `<ENV>` | Environment | `prod` (default) → write `--env prod`; `--env staging` for staging |
 | `<PROJECT_NAME>` | New nu-service name | `my-new-service` |
 | `<CUSTOMER_ID>` | Customer UUID | from `factorio` create / customer record |
 | `<CARD_ID>` | Card UUID | from the `all-cards` response |
@@ -61,7 +69,8 @@ Every recipe draws its placeholders from this single table — keep them uniform
 
 - **Service call:** `<ACCOUNT> ser curl <METHOD> <SHARD> <SERVICE> <PATH> [--env <ENV>] [-f] [-d '<json>' | --data '<edn>' --content-type edn] [--cid <CID>]`
   - `-f` follows redirects / fails on error (keep it for reads).
-  - `--env staging` targets staging; **omit `--env` for prod** (be careful).
+  - **Always write `--env` explicitly:** `--env prod` for prod (default),
+    `--env staging` for staging. (Prod is live — be careful.)
   - JSON body → `-d '{...}'`. EDN body → `--data '{...}' --content-type edn`.
 - **Kafka:** `<ACCOUNT> kafka produce <TOPIC> '<BODY_MESSAGE>' --content-type json --shard <SHARD>`
 - **EDN gotcha:** UUIDs are tagged literals: `#uuid "..."`. Sets use `#{...}`.
@@ -206,6 +215,44 @@ uuidgen | xargs -I__SID__ \
 ```
 > `<SAVINGS_ACCOUNT_ID>` / `<CREDIT_ACCOUNT_ID>` in the example are sample values —
 > always swap for real ones. `source-id` is generated fresh by `uuidgen` each run.
+
+---
+
+## Card features (enable / eligibility)
+
+### Check debit-feature eligibility (batuta)
+> Programmatic debit-eligibility check for a customer. Pairs with "Enable the
+> debit feature" below. `batuta` is the debit-eligibility service.
+```bash
+<ACCOUNT> ser curl get <SHARD> batuta /api/customers/<CUSTOMER_ID>/debit-feature-eligibility --env <ENV> -f
+```
+_Example:_
+```bash
+nu-br ser curl get s19 batuta /api/customers/5b799d26-efbf-4b0b-ae75-56527d49fe5b/debit-feature-eligibility --env prod -f
+```
+
+### Enable the debit feature (crebito)
+> Admin route, keyed by `<CARD_ID>`. **Before enabling:** confirm the customer's
+> debit account is **requested and active** in the "Nuconta" widget (3rd column).
+> Empty body: `--data '{}'`.
+```bash
+<ACCOUNT> ser curl put <SHARD> crebito /api/admin/cards/<CARD_ID>/features/debit/enable --data '{}' --env <ENV>
+```
+_Example:_
+```bash
+nu-br ser curl put s0 crebito /api/admin/cards/69c1a764-e413-47fa-a452-5f19cc9bb5cd/features/debit/enable --data '{}' --env prod
+```
+
+### Enable the credit feature (crebito)
+> Admin route, keyed by `<CARD_ID>`. **Before enabling:** confirm a credit account
+> exists for the customer in the "Conta" widget (2nd column). Empty body: `--data '{}'`.
+```bash
+<ACCOUNT> ser curl put <SHARD> crebito /api/admin/cards/<CARD_ID>/features/credit/enable --data '{}' --env <ENV>
+```
+_Example:_
+```bash
+nu-br ser curl put s0 crebito /api/admin/cards/69c1a764-e413-47fa-a452-5f19cc9bb5cd/features/credit/enable --data '{}' --env prod
+```
 
 ---
 
