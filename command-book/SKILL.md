@@ -6,7 +6,8 @@ description: >-
   when the user asks "how do I <do X>", "what's the command / curl / nucli for
   <X>", or names a known recipe: produce a topic, create a customer, get/activate/
   create a card, refresh credentials, start a new nu-service, update Santa rules,
-  or pull Alexandria logs. Recall the matching template, fill in the user's IDs,
+  adjust a card's category/product type, or pull Alexandria logs. Recall the
+  matching template, fill in the user's IDs,
   and hand back ONE ready-to-run command — do not execute it.
 ---
 
@@ -64,6 +65,9 @@ Every recipe draws its placeholders from this single table — keep them uniform
 | `<TOPIC>` | Kafka topic | `CARDS.FEATURE-CHANGED` |
 | `<BODY_MESSAGE>` | JSON payload for the topic | the full message from a deadletter |
 | `<UUID_TO_TRACE>` | Id to grep for in logs | the id you're following |
+| `<PRODUCT_ID>` | Card product id (hitaiate) | from the `/product` lookup below |
+| `<PRODUCT_TYPE>` | Target card product type | `gold` · `platinum` |
+| `<COMBO_PRODUCT_TYPE>` | Target combo product type | `gold` · `platinum` |
 
 ### Command grammar (for building variants not in the catalog)
 
@@ -215,6 +219,50 @@ uuidgen | xargs -I__SID__ \
 ```
 > `<SAVINGS_ACCOUNT_ID>` / `<CREDIT_ACCOUNT_ID>` in the example are sample values —
 > always swap for real ones. `source-id` is generated fresh by `uuidgen` each run.
+
+---
+
+## Card category / product type (hitaiate)
+
+> Use when a card issued with the wrong category (e.g. gold vs platinum), a
+> virtual card came out wrong, an up/downgrade didn't take, or before reissuing
+> a physical card with the correct product type. Required scope:
+> `update-card-parameters`. Two-step: look up the current `product_id` first,
+> then post the correction.
+
+### Check the current product
+```bash
+<ACCOUNT> ser curl get <SHARD> hitaiate /api/customers/<CUSTOMER_ID>/product --env <ENV> -f
+```
+_Example:_
+```bash
+nu-br ser curl get s0 hitaiate /api/customers/<CUSTOMER_ID>/product --env prod -f
+```
+> Save the `product_id` field from the response for the next step.
+
+### Update the card parameters
+```bash
+<ACCOUNT> ser curl post <SHARD> hitaiate /api/admin/card-parameters/customer/<CUSTOMER_ID> \
+  -d '{
+    "document": {
+      "product_id": "<PRODUCT_ID>",
+      "product_type": "<PRODUCT_TYPE>",
+      "combo_product_type": "<COMBO_PRODUCT_TYPE>"
+    }
+  }' --env <ENV> --cid <CID>
+```
+_Example:_
+```bash
+nu-br ser curl post s0 hitaiate /api/admin/card-parameters/customer/<CUSTOMER_ID> \
+  -d '{
+    "document": {
+      "product_id": "<PRODUCT_ID>",
+      "product_type": "gold",
+      "combo_product_type": "gold"
+    }
+  }' --env prod --cid CARD-1234
+```
+> `<CID>` here is the ticket ID for tracking (e.g. `CARD-1234`), not a UUID.
 
 ---
 
