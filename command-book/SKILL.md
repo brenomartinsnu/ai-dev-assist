@@ -264,6 +264,15 @@ nu-br ser curl post s0 hitaiate /api/admin/card-parameters/customer/<CUSTOMER_ID
 ```
 > `<CID>` here is the ticket ID for tracking (e.g. `CARD-1234`), not a UUID.
 
+### Default `<PRODUCT_ID>` values (BR)
+> Observed defaults for standard BR products — confirm against the `/product`
+> lookup for the specific customer before trusting these for an edge case.
+
+| `<PRODUCT_TYPE>` | `<PRODUCT_ID>` (BR) |
+|---|---|
+| `platinum` | `ff98fb1b-b502-4634-b7e9-fe841373af6d` |
+| `gold` | `d1cc5be8-de2a-4f83-9323-b0a2209b9216` |
+
 ---
 
 ## Card features (enable / eligibility)
