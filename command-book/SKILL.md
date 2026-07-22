@@ -68,6 +68,8 @@ Every recipe draws its placeholders from this single table — keep them uniform
 | `<PRODUCT_ID>` | Card product id (hitaiate) | from the `/product` lookup below |
 | `<PRODUCT_TYPE>` | Target card product type | `gold` · `platinum` |
 | `<COMBO_PRODUCT_TYPE>` | Target combo product type | `gold` · `platinum` |
+| `<USER_ID>` | Nubank user email local-part (no `@nubank.com.br`) | `somebody.bla` |
+| `<COUNTRY>` | Country/geography for `--country` flag | `br` (default) · `mx` · `co` |
 
 ### Command grammar (for building variants not in the catalog)
 
@@ -146,7 +148,22 @@ nu-mx ser curl POST global factorio /api/customers -d '{"limit-range-max": 5000}
 
 ## Card management
 
-### Get all cards for a customer
+### Get all cards for a customer (default — excludes canceled)
+> All **non-canceled** cards, physical + virtual. Route `:all-cards-non-canceled-by-customer`.
+> This is the default "get all cards" recipe. Use the **include-canceled** variant
+> below only when the user explicitly asks to include canceled cards.
+```bash
+<ACCOUNT> ser curl get <SHARD> crebito /api/customers/<CUSTOMER_ID>/cards/all-cards-non-canceled --env <ENV> -f
+```
+_Example:_
+```bash
+nu-mx ser curl get s0 crebito /api/customers/<CUSTOMER_ID>/cards/all-cards-non-canceled --env staging -f
+```
+> Physical-only variant: swap the path for `/api/customers/<CUSTOMER_ID>/cards/non-canceled` (route `:non-canceled-cards-by-customer`).
+
+### Get all cards for a customer, including canceled
+> Returns **every** card (including canceled), sorted by tx instant. Route `:get-all-cards-by-customer`.
+> Use only when the user explicitly asks for canceled cards to be included.
 ```bash
 <ACCOUNT> ser curl get <SHARD> crebito /api/customers/<CUSTOMER_ID>/all-cards --env <ENV> -f
 ```
@@ -154,7 +171,6 @@ _Example:_
 ```bash
 nu-mx ser curl get s0 crebito /api/customers/<CUSTOMER_ID>/all-cards --env staging -f
 ```
-> Returns **every** card (including canceled), sorted by tx instant. Route `:get-all-cards-by-customer`.
 
 ### Get one card (by card id)
 > Single card with profile + activation status. Keyed by `<CARD_ID>`, on the card owner's `<SHARD>`. Route `:one-card` → `in/one-card+profile+activation-status`.
@@ -165,17 +181,6 @@ _Example:_
 ```bash
 nu-mx ser curl get s0 crebito /api/cards/<CARD_ID> --env staging -f
 ```
-
-### Get not-canceled cards for a customer
-> All **non-canceled** cards, physical + virtual. Route `:all-cards-non-canceled-by-customer`.
-```bash
-<ACCOUNT> ser curl get <SHARD> crebito /api/customers/<CUSTOMER_ID>/cards/all-cards-non-canceled --env <ENV> -f
-```
-_Example:_
-```bash
-nu-mx ser curl get s0 crebito /api/customers/<CUSTOMER_ID>/cards/all-cards-non-canceled --env staging -f
-```
-> Physical-only variant: swap the path for `/api/customers/<CUSTOMER_ID>/cards/non-canceled` (route `:non-canceled-cards-by-customer`).
 
 ### Activate a card
 ```bash
@@ -311,6 +316,21 @@ _Example:_
 nu-br ser curl put s0 crebito /api/admin/cards/69c1a764-e413-47fa-a452-5f19cc9bb5cd/features/credit/enable --data '{}' --env prod
 ```
 
+### Fix confirmed-shipping-status mismatch (crebito migration)
+> Use when the physical card's feature(s) are already **active** in crebito but
+> shuffle still shows shipping status as **entregue** (stuck, not reflecting
+> activation) — a stale card-tracking sync, not a feature-enablement gap.
+> **Validate first:** confirm in crebito that the feature(s) are active, and
+> confirm shuffle still shows "entregue" for that card. Only then run the
+> migration below.
+```bash
+<ACCOUNT> ser curl put <SHARD> crebito /api/admin/migration/cards/<CARD_ID>/fix-confirmed-shipping-status --env <ENV>
+```
+_Example:_
+```bash
+nu-br ser curl put s2 crebito /api/admin/migration/cards/6a33ffa4-13d6-4cd4-88be-a8999c6bc9a5/fix-confirmed-shipping-status --env prod
+```
+
 ---
 
 ## Tokenization & fraud
@@ -334,6 +354,23 @@ _Example:_
 uuidgen | xargs -I__AID__ \
   nu-br ser curl post s3 piata /api/tokenization-requests/validate \
   --data '{"customer-id":"5b799d26-efbf-4b0b-ae75-56527d49fe5b","authorization-id":"__AID__"}' -f
+```
+
+---
+
+## Security / access scopes
+
+### Show a user's scopes (by country)
+> Lists scopes currently granted to a user, plus (for yourself) a comparison
+> against the scopes on your live access token. `<USER_ID>` is the email
+> local-part (no `@nubank.com.br`). Omit `<USER_ID>` to check your own scopes.
+> Re-run with a different `--country` to check another geography (`br`/`mx`/`co`).
+```bash
+nu security scope show <USER_ID> --country <COUNTRY> --env <ENV>
+```
+_Example:_
+```bash
+nu security scope show somebody.bla --country mx --env prod
 ```
 
 ---
