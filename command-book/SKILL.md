@@ -356,6 +356,18 @@ uuidgen | xargs -I__AID__ \
   --data '{"customer-id":"5b799d26-efbf-4b0b-ae75-56527d49fe5b","authorization-id":"__AID__"}' -f
 ```
 
+### Add customer to Apple Pay orange-path exception list
+> `nu` top-level CLI subcommand (not the `ser curl` grammar) — allowlists a
+> customer against the orange-path / device-score TAR deny decision described
+> above.
+```bash
+nu card orange-path-allow <CUSTOMER_ID>
+```
+_Example:_
+```bash
+nu card orange-path-allow 5b799d26-efbf-4b0b-ae75-56527d49fe5b
+```
+
 ---
 
 ## Security / access scopes
