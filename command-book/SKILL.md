@@ -191,24 +191,43 @@ _Example:_
 nu-mx ser curl post s0 crebito /api/cards/<CARD_ID>/activation --env staging -f -d '{"last-four": "1234"}'
 ```
 
-### Create a card — Debit (gold)
+### Create a card — Debit
 > `uuidgen | xargs -I__SID__` auto-fills `source-id` at runtime — no need to pre-generate it.
+> **`<PRODUCT_TYPE>` is country-specific** — see the table below. Don't assume
+> `gold-debit` applies outside BR/MX; US uses a flat `debit-card` type.
 ```bash
 uuidgen | xargs -I__SID__ \
   <ACCOUNT> ser curl post <SHARD> kuchiyose /api/admin/customers/<CUSTOMER_ID>/manual-card-request \
-  --data '{:card-profile :debit-single :features-to-activate #{:debit} :savings-account-id #uuid "<SAVINGS_ACCOUNT_ID>" :product-type :gold-debit :virtual? true :source-type :primary-card :source-id #uuid "__SID__"}' \
+  --data '{:card-profile :debit-single :features-to-activate #{:debit} :savings-account-id #uuid "<SAVINGS_ACCOUNT_ID>" :product-type <PRODUCT_TYPE> :virtual? true :source-type :primary-card :source-id #uuid "__SID__"}' \
   --content-type edn --env <ENV> --cid <CID>
 ```
-_Example:_
+_Example (BR/MX — gold):_
 ```bash
 uuidgen | xargs -I__SID__ \
   nu-mx ser curl post s0 kuchiyose /api/admin/customers/<CUSTOMER_ID>/manual-card-request \
   --data '{:card-profile :debit-single :features-to-activate #{:debit} :savings-account-id #uuid "69efad12-3a82-4686-a454-0317f6fae9ba" :product-type :gold-debit :virtual? true :source-type :primary-card :source-id #uuid "__SID__"}' \
   --content-type edn --env staging --cid <CID>
 ```
+_Example (US — flat debit product):_
+```bash
+uuidgen | xargs -I__SID__ \
+  nu-us-staging ser curl post s0 kuchiyose /api/admin/customers/<CUSTOMER_ID>/manual-card-request \
+  --data '{:card-profile :debit-single :features-to-activate #{:debit} :savings-account-id #uuid "6890f198-4020-40d8-89b7-0e09c7837b88" :product-type :debit-card :virtual? true :source-type :primary-card :source-id #uuid "__SID__"}' \
+  --content-type edn --env staging --cid <CID>
+```
+
+#### `<PRODUCT_TYPE>` by country (debit)
+| Country | `<PRODUCT_TYPE>` |
+|---|---|
+| BR / MX | `:gold-debit` |
+| US | `:debit-card` |
+> US has no gold/platinum debit tiering — confirm against the target account's
+> product catalog before assuming other countries follow BR's tiered values.
 
 ### Create a card — Credit (gold)
 > `uuidgen | xargs -I__SID__` auto-fills `source-id` at runtime — no need to pre-generate it.
+> This is a **BR/MX example** (`:product-type :gold`). Not yet confirmed for US —
+> don't assume it carries over; check the target country's product catalog first.
 ```bash
 uuidgen | xargs -I__SID__ \
   <ACCOUNT> ser curl post <SHARD> kuchiyose /api/admin/customers/<CUSTOMER_ID>/manual-card-request \
