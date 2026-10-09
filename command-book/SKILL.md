@@ -148,6 +148,19 @@ nu-mx ser curl POST global factorio /api/customers -d '{"limit-range-max": 5000}
 
 ## Card management
 
+### Get a customer's shard (and basic info)
+> Use to find `<SHARD>` for a `<CUSTOMER_ID>` before any `ser curl` call, or to
+> resolve the shard for the other side of an additional-card relationship
+> (owner/holder). Not the `ser curl` grammar — a plain `nu` subcommand.
+```bash
+nu customer id <CUSTOMER_ID> --env <ENV>
+```
+_Example:_
+```bash
+nu customer id 609d445d-05b8-48af-a849-f1f6e17c3bb9 --env prod
+```
+> Returns `:customer-shard`, name, CPF/DOB, email, tags, device history, etc.
+
 ### Get all cards for a customer (default — excludes canceled)
 > All **non-canceled** cards, physical + virtual. Route `:all-cards-non-canceled-by-customer`.
 > This is the default "get all cards" recipe. Use the **include-canceled** variant
@@ -181,6 +194,23 @@ _Example:_
 ```bash
 nu-mx ser curl get s0 crebito /api/cards/<CARD_ID> --env staging -f
 ```
+
+### Get one card via the cards gateway (handles additional cards)
+> Use `kageyose` instead of `crebito` when the card might be an **additional
+> card** (`card_category: additional_card`), not just a primary/titular card.
+> Response includes a `relationship` block (`owner` and `holder`, each with
+> `customer_id`/`customer_name`) when the card is additional. `<SHARD>` only
+> needs to be the shard for one side of the relationship (owner or holder) —
+> kageyose resolves the other side cross-shard internally.
+```bash
+<ACCOUNT> ser curl get <SHARD> kageyose /api/cards/<CARD_ID> --env <ENV> -f
+```
+_Example:_
+```bash
+nu-br ser curl get s10 kageyose /api/cards/<CARD_ID> --env prod -f
+```
+> To find the shard for the other side of the relationship (e.g. the holder),
+> use `nu customer id <CUSTOMER_ID> --env <ENV>` and read `:customer-shard`.
 
 ### Activate a card
 ```bash
@@ -243,6 +273,26 @@ uuidgen | xargs -I__SID__ \
 ```
 > `<SAVINGS_ACCOUNT_ID>` / `<CREDIT_ACCOUNT_ID>` in the example are sample values —
 > always swap for real ones. `source-id` is generated fresh by `uuidgen` each run.
+
+### Fix duplicated open card chain (joker, causes ABU category-update errors)
+> Use when ABU can't update a chain-option/category for a customer's card
+> (e.g. Shuffle ABU widget errors on one form-factor but not the other), and
+> `joker` datomic shows two `open` chain-states for the same `:chain/type`
+> (e.g. `primary-card-physical-combo`). Keeps the most recent open chain,
+> re-types the older duplicate(s) to `:migration-error-please-disregard` so
+> they stop counting as the active chain. Owned by joker/card-squad — scope
+> `cards-admin` or `cards-general`. Async (200 with empty body is expected).
+```bash
+<ACCOUNT> ser curl post <SHARD> joker /api/admin/migration/migrate-duplicated-open-chains/customer/<CUSTOMER_ID> --env <ENV> -f
+```
+_Example:_
+```bash
+nu-br ser curl post s17 joker /api/admin/migration/migrate-duplicated-open-chains/customer/623a5790-5c17-4799-923a-4a874b4b596d --env prod -f
+```
+> To confirm beforehand (and verify after), query joker's own datomic for open
+> chains by customer+type — see `reference-coppola-datomic-grafana-mcp` memory
+> for `nu datomic query` syntax. Look for more than one `:chain-state/chain-status`
+> `open` row sharing the same `:chain/type`.
 
 ---
 
@@ -312,6 +362,23 @@ _Example:_
 nu-br ser curl get s19 batuta /api/customers/5b799d26-efbf-4b0b-ae75-56527d49fe5b/debit-feature-eligibility --env prod -f
 ```
 
+### Associate a savings (debit) account to a card (gaara)
+> Use when a card has no `savings_account` linked (missing from the `get card`
+> response) despite the customer having an active savings account — mirrors the
+> credit-account case but goes through `gaara`, not a crebito migration endpoint.
+> **Check eligibility first** with "Check debit-feature eligibility" above.
+> `auto-enable-feature?: false` — the debit feature may still auto-activate once
+> the account associates (observed), so re-check the card afterward before
+> assuming you need to run "Enable the debit feature" below.
+> Source: Confluence "Customer unable to activate debit function" (CS space, page 264248820119).
+```bash
+<ACCOUNT> ser curl post <SHARD> gaara /api/admin/requests --data '{"source-type":"manual-debit", "account":{"type":"savings", "id":"<SAVINGS_ACCOUNT_ID>"}, "auto-enable-feature?":false, "source-id":"<CARD_ID>", "feature":"debit", "customer-id":"<CUSTOMER_ID>"}' --env <ENV>
+```
+_Example:_
+```bash
+nu-br ser curl post s2 gaara /api/admin/requests --data '{"source-type":"manual-debit", "account":{"type":"savings", "id":"649673dd-1de3-429a-8936-809fcb89e299"}, "auto-enable-feature?":false, "source-id":"68b1b433-4df6-4cf3-81a4-dae67dc32201", "feature":"debit", "customer-id":"649673b3-b999-44b6-a3a9-d3fcb0fa2f24"}' --env prod
+```
+
 ### Enable the debit feature (crebito)
 > Admin route, keyed by `<CARD_ID>`. **Before enabling:** confirm the customer's
 > debit account is **requested and active** in the "Nuconta" widget (3rd column).
@@ -335,6 +402,21 @@ _Example:_
 nu-br ser curl put s0 crebito /api/admin/cards/69c1a764-e413-47fa-a452-5f19cc9bb5cd/features/credit/enable --data '{}' --env prod
 ```
 
+### Check if an activation/cross-sell widget shows for a customer (mr-white)
+> Use when a feature (e.g. credit) is associated in crebito but still shows as
+> unavailable to the customer — checks whether the shell renders an
+> activation/cross-sell button. Look for `cross-sell-primary-button-id` (or
+> other `*-button-id`) in the response; if absent, the pending-activation
+> widget isn't showing and the case likely needs escalation to **card-creation**.
+> Source: Confluence "Account Not Associated with Card" (CS space, page 264233756370).
+```bash
+<ACCOUNT> ser curl get <SHARD> mr-white /api/customers/<CUSTOMER_ID>/shell/content-widgets --env <ENV> -f
+```
+_Example:_
+```bash
+nu-br ser curl get s10 mr-white /api/customers/5fa9c4b9-4acc-4b78-8828-5906a106a810/shell/content-widgets --env prod -f
+```
+
 ### Fix confirmed-shipping-status mismatch (crebito migration)
 > Use when the physical card's feature(s) are already **active** in crebito but
 > shuffle still shows shipping status as **entregue** (stuck, not reflecting
@@ -349,6 +431,20 @@ _Example:_
 ```bash
 nu-br ser curl put s2 crebito /api/admin/migration/cards/6a33ffa4-13d6-4cd4-88be-a8999c6bc9a5/fix-confirmed-shipping-status --env prod
 ```
+
+### Associate/fix a card's credit account (crebito migration)
+> Use when a card needs its `credit-account-id` set or corrected (e.g. missing
+> association, wrong account linked). This is a "migration" fix-up endpoint —
+> it validates that the card's customer matches the credit-account's customer
+> and will refuse to link if they don't. Route: `update-credit-account`.
+```bash
+<ACCOUNT> ser curl post <SHARD> crebito /api/admin/migration/cards/<CARD_ID>/update-credit-account -d '{"credit-account-id": "<CREDIT_ACCOUNT_ID>"}' --env <ENV>
+```
+_Example:_
+```bash
+nu-br ser curl post s2 crebito /api/admin/migration/cards/6a75e23f-71c2-4f61-880f-f0de02cdfd2e/update-credit-account -d '{"credit-account-id": "63b70ef6-7354-4619-b96a-d01287749771"}' --env prod
+```
+> Related: `POST /api/admin/migration/cards/<CARD_ID>/remove-credit-account` removes the association; `DELETE /api/admin/migration/credit-account/<CREDIT_ACCOUNT_ID>` removes a credit-account for a customer.
 
 ---
 
@@ -366,13 +462,13 @@ nu-br ser curl put s2 crebito /api/admin/migration/cards/6a33ffa4-13d6-4cd4-88be
 ```bash
 uuidgen | xargs -I__AID__ \
   <ACCOUNT> ser curl post <SHARD> piata /api/tokenization-requests/validate \
-  --data '{"customer-id":"<CUSTOMER_ID>","authorization-id":"__AID__"}' -f
+  --data '{"customer-id":"<CUSTOMER_ID>","authorization-id":"__AID__"}' --env <ENV> -f
 ```
 _Example:_
 ```bash
 uuidgen | xargs -I__AID__ \
   nu-br ser curl post s3 piata /api/tokenization-requests/validate \
-  --data '{"customer-id":"5b799d26-efbf-4b0b-ae75-56527d49fe5b","authorization-id":"__AID__"}' -f
+  --data '{"customer-id":"5b799d26-efbf-4b0b-ae75-56527d49fe5b","authorization-id":"__AID__"}' --env prod -f
 ```
 
 ### Add customer to Apple Pay orange-path exception list
@@ -385,6 +481,28 @@ nu card orange-path-allow <CUSTOMER_ID>
 _Example:_
 ```bash
 nu card orange-path-allow 5b799d26-efbf-4b0b-ae75-56527d49fe5b
+```
+
+---
+
+## Kubernetes / Pods
+
+### Get pods status for a service
+```bash
+<ACCOUNT> k8s get pods <SHARD> <SERVICE> --env <ENV>
+```
+_Example:_
+```bash
+nu-br k8s get pods s0 crebito --env prod
+```
+
+### Cycle (restart) a service's pods
+```bash
+<ACCOUNT> k8s cycle <SHARD> <SERVICE> --env <ENV>
+```
+_Example:_
+```bash
+nu-br k8s cycle s0 crebito --env prod
 ```
 
 ---
